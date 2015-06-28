@@ -90,15 +90,20 @@ class SimpleTopo(Topo):
         return
 
 def get_host_id(hostname):
-    return int(hostname.split('-')[0])
+    return int(hostname.split('-')[1])
 
-def getIP(hostname, asn):
+def get_host_asn(hostname):
+    asn = int(hostname.split('-')[0].replace('h', ''))
+    return asn
+
+def getIP(hostname):
+    asn = get_host_asn(hostname)
     num = get_host_id(hostname)
-    AS = int(AS)
     ip = '%s.0.%s.1/24' % (10+asn, num)
     return ip
 
-def getGateway(hostname, asn):
+def getGateway(hostname):
+    asn = get_host_asn(hostname)
     num = get_host_id(hostname)
     gw = '%s.0.%s.254' % (10+asn, num)
     return gw
@@ -119,9 +124,9 @@ def main():
     sleep(sleep_time)
 
     for router in net.switches:
-        router.cmd("bird 2>&1" % (router.name, router.name, router.name), shell=True)
+        router.cmd("bird 2>&1", shell=True)
         router.waitOutput()
-        log("Starting bird on %s" % router.name)
+        print "Starting bird on %s" % router.name
 
     for host in net.hosts:
         host.cmd("ifconfig %s-eth0 %s" % (host.name, getIP(host.name)))
