@@ -63,14 +63,14 @@ class SimpleTopo(Topo):
         num_hosts = num_hosts_per_as * num_ases
         # The topology has one router per AS
         routers = []
-        for i in xrange(num_ases):
-            router = self.addSwitch('R%d' % (i+1))
+        for i in range(1, num_ases+1):
+            router = self.addSwitch('R%d' % (i))
             routers.append(router)
         hosts = []
-        for i in xrange(num_ases):
-            router = 'R%d' % (i+1)
-            for j in xrange(num_hosts_per_as):
-                hostname = 'h%d-%d' % (i+1, j+1)
+        for i in range(1, num_ases+1):
+            router = 'R%d' % (i)
+            for j in range(num_hosts_per_as):
+                hostname = 'h%d_%d' % (i, j)
                 host = self.addNode(hostname)
                 hosts.append(host)
                 self.addLink(router, host)
@@ -81,31 +81,32 @@ class SimpleTopo(Topo):
         self.addLink('R1', 'R3')
         self.addLink('R3', 'R4')
 
-        for asn in range(num_ases):
-            for j in range(num_hosts_per_as):
-                hostname = 'h{}-{}'.format(asn, j)
-                host = self.addNode(hostname)
-                hosts.append(host)
-                self.addLink('R{}'.format(asn+1), hostname)
         return
 
 def get_host_id(hostname):
-    return int(hostname.split('-')[1])
+    return int(hostname.split('_')[1])
 
 def get_host_asn(hostname):
-    asn = int(hostname.split('-')[0].replace('h', ''))
+    asn = int(hostname.split('_')[0].replace('h', ''))
     return asn
+
+def get_router_asn(hostname):
+    return int(hostname.replace('R', ''))
+
+def get_router_ip(hostname):
+    asn = get_router_asn(hostname)
+    ip = '{}.0.1.254'.format(10+asn)
+    return ip
 
 def getIP(hostname):
     asn = get_host_asn(hostname)
     num = get_host_id(hostname)
-    ip = '%s.0.%s.1/24' % (10+asn, num)
+    ip = '%s.0.%s.1' % (10+asn, num)
     return ip
 
 def getGateway(hostname):
     asn = get_host_asn(hostname)
-    num = get_host_id(hostname)
-    gw = '%s.0.%s.254' % (10+asn, num)
+    gw = '%s.0.1.254' % (10+asn)
     return gw
 
 bird_template = '''
@@ -113,24 +114,31 @@ log syslog all;
 
 router id {local_ip};
 
-protocol kernel \\{
+protocol kernel {{
    import all;
    export all;
-\\}
+}}
 {neighbors}
 '''
 neighbor_template = '''
-protocol bgp as{remote_as} \\{
+protocol bgp as{remote_as} {{
     import all;
     export all;
     local as {local_as};
-    source {local_ip};
+    source address {local_ip};
     neighbor {neighbor_ip} as {remote_as};
-\\}
+}}
 '''
 
+def make_directories(d):
+    try:
+        os.makedirs(os.path.dirname(d))
+    except OSError:
+        pass
+    return
+
 def get_bird_conf(hostname):
-    return '/usr/loca/etc/bird.{}.conf'.format(hostname)
+    return '/usr/local/etc/bird.{}.conf'.format(hostname)
 
 def write_bgp_conf(hostname, neighbors):
     local_asn = get_router_asn(hostname)
@@ -145,6 +153,7 @@ def write_bgp_conf(hostname, neighbors):
 
     buf = bird_template.format(local_ip=ip, neighbors=neighbor_buf)
     ofn = get_bird_conf(hostname)
+    make_directories(ofn)
     with open(ofn, 'w') as fp:
         fp.write(buf)
 
@@ -159,21 +168,27 @@ def main():
         router.cmd("sysctl -w net.ipv4.ip_forward=1")
         router.waitOutput()
 
-    sleep_time = 10
+    sleep_time = 1
     print "Waiting {} seconds for sysctl changes to take effect...".format(sleep_time)
     sleep(sleep_time)
 
     #Write the bird config files
     write_bgp_conf('R1', ['R2', 'R3'])
     write_bgp_conf('R2', ['R1', 'R4'])
-    write_bgp_conf('R3' ['R1', 'R4'])
-    write_bgp_conf('R4' ['R2', 'R3'])
+    write_bgp_conf('R3', ['R1', 'R4'])
+    write_bgp_conf('R4', ['R2', 'R3'])
 
+    os.system("killall -9 bird")
     for router in net.switches:
+
+        router.cmd("ifconfig {}-eth1 {}".format(router.name, get_router_ip(router.name)))
+
         conf = get_bird_conf(router.name)
-        router.cmd("bird -c {} 2>&1".format(conf), shell=True)
-        router.waitOutput()
+        cmd = "bird -c {} 2>&1".format(conf)
         print "Starting bird on %s" % router.name
+        print cmd
+        router.cmd(cmd, shell=True)
+        router.waitOutput()
 
     for host in net.hosts:
         host.cmd("ifconfig %s-eth0 %s" % (host.name, getIP(host.name)))
